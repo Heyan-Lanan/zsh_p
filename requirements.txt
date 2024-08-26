@@ -1,0 +1,11 @@
+opencv-python
+scipy
+pyrealsense2==2.54.1.5216
+ultralytics==8.0.136
+numpy
+catkin-tools
+rospkg
+pyyaml
+empy
+pytorch-minimize
+dill

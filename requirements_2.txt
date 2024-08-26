@@ -1,0 +1,5 @@
+numpy
+catkin-tools
+rospkg
+pyyaml
+empy
