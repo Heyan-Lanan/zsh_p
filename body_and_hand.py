@@ -1,3 +1,4 @@
+import copy
 import sys
 
 # sys.path.append('/home/kinova/catkin_ws_zsh2/src/test/scripts')
@@ -6,7 +7,7 @@ import numpy as np
 import pyrealsense2 as rs
 import cv2
 import torch
-
+from trajectory_msgs.msg import JointTrajectoryPoint
 from openpose_light import OpenposeLight
 import roslib
 import rospy
@@ -66,7 +67,7 @@ h1 = 480
 w2 = 640
 h2 = 480
 
-rospy.init_node('human_pose', anonymous=False, log_level=rospy.INFO, disable_signals=False)
+# rospy.init_node('human_pose', anonymous=False, log_level=rospy.INFO, disable_signals=False)
 RT_camera_chess_center = None
 RT_chess_base = None
 
@@ -193,6 +194,15 @@ class RealsensePose:
 
         self.init_realsense(w, h)
 
+        rospy.init_node('hand_tracker', anonymous=True)
+        self.handpose_pub = rospy.Publisher('/hand_traj', JointTrajectoryPoint, queue_size=10)
+        self.hand_pose = JointTrajectoryPoint()
+        self.t1, self.t2 = 0, 0
+        self.v = np.array([0, 0, 0])
+        self.wp1 = np.array([0, 0, 0])
+        self.wp2 = np.array([0, 0, 0])
+        self.check_init = 0
+
     def init_realsense(self, w, h):
         config = rs.config()
         config.enable_device('220422302842')
@@ -307,17 +317,18 @@ class RealsensePose:
             qr_sign = 0
             # print(RT_camera_chess_center)
 
-            # gray = cv2.cvtColor(color_image, cv2.COLOR_BGR2GRAY)
-            # params = aruco.DetectorParameters()
-            # aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_100)
-            # detector = aruco.ArucoDetector(aruco_dict, params)
-            # corners, ids, _ = detector.detectMarkers(gray)
-            # frame_markers = aruco.drawDetectedMarkers(color_image.copy(), corners, ids)
+            gray = cv2.cvtColor(color_image, cv2.COLOR_BGR2GRAY)
+            params = aruco.DetectorParameters()
+            aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_100)
+            detector = aruco.ArucoDetector(aruco_dict, params)
+            corners, ids, _ = detector.detectMarkers(gray)
+            frame_markers = aruco.drawDetectedMarkers(color_image.copy(), corners, ids)
 
             # poses = self.openpose.predict(color_image)
 
-            hands, frame_markers = hand_detector.findHands(color_image.copy(), draw=True, flipType=True)
+            hands, frame_markers = hand_detector.findHands(frame_markers.copy(), draw=True, flipType=True)
             # frame_markers = color_image.copy()
+            set_ids = [0, 12]
             if hands:
                 # cv2.circle(color_image, hands[0]['lmList'][0][:2], 5, (0,0,255), -1)
                 # cv2.circle(color_image, hands[0]['lmList'][4][:2], 5, (0, 0, 255), -1)
@@ -326,17 +337,41 @@ class RealsensePose:
                 # cv2.circle(color_image, hands[0]['lmList'][16][:2], 5, (0, 0, 255), -1)
                 # cv2.circle(color_image, hands[0]['lmList'][20][:2], 5, (0, 0, 255), -1)
                 # print(hands[0]['lmList'])
-                x = hands[-1]['lmList'][12][0]
-                y = hands[-1]['lmList'][12][1]
-                finger_12_3d = vertices[w2 * int(y) + int(x)]
-                # print(wrist_3d)
-                if finger_12_3d[0] != 0.0 and finger_12_3d[1] != 0.0 and finger_12_3d[2] != 0.0:
-                    finger_12_3d_base = trans_camera_base(finger_12_3d)
-                    # print(wrist_3d_base)
-                    w_param = [float(finger_12_3d_base[0]), float(finger_12_3d_base[1]), float(finger_12_3d_base[2])]
-                    rospy.set_param("finger_12", w_param)
-                    text = '{:.2f}, {:.2f}, {:.2f}'.format(w_param[0], w_param[1], w_param[2])
-                    cv2.putText(frame_markers, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                fingers_l = []
+                for finger_id in range(21):
+                    x = hands[-1]['lmList'][finger_id][0]
+                    y = hands[-1]['lmList'][finger_id][1]
+                    finger_3d = vertices[min(w2 * int(y) + int(x), 307200 - 1)]
+                    # print(wrist_3d)
+                    if finger_3d[0] != 0.0 and finger_3d[1] != 0.0 and finger_3d[2] != 0.0:
+                        finger_3d_base = trans_camera_base(finger_3d)
+                        # print(wrist_3d_base)
+                        w_param = [float(finger_3d_base[0]), float(finger_3d_base[1]), float(finger_3d_base[2])]
+
+                        rospy.set_param("finger_" + str(finger_id), w_param)
+                        if finger_id == 10:
+                            text = '{:.2f}, {:.2f}, {:.2f}'.format(w_param[0], w_param[1], w_param[2])
+                            # cv2.putText(frame_markers, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        fingers_l.append(w_param)
+                if len(fingers_l) > 0:
+                    fingers_mean = np.mean(fingers_l, axis=0)
+                    text = '{:.2f}, {:.2f}, {:.2f}'.format(fingers_mean[0], fingers_mean[1], fingers_mean[2])
+                    cv2.putText(frame_markers, text, (400, 400), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        # if finger_id == 0:
+                        #     self.t1 = rospy.get_time()
+                        #     self.wp1 = finger_3d_base
+                        #     delta_t = self.t1 - self.t2
+                        #     if self.check_init > 0 and 0 < delta_t < 1:
+                        #         self.v = (self.wp1 - self.wp2) / delta_t
+                        #     else:
+                        #         self.v = [0, 0, 0]
+                        #     self.check_init += 1
+                        #     self.wp2 = self.wp1
+                        #     self.t2 = copy.copy(self.t1)
+                        #     self.hand_pose.positions = self.wp1
+                        #     self.hand_pose.velocities = self.v
+                        #     self.hand_pose.time_from_start = rospy.Time.now()
+                        #     self.handpose_pub.publish(self.hand_pose)
 
             # print(torch.cuda.is_available())
             results = self.yolo_model(color_image, device=0)
@@ -358,9 +393,12 @@ class RealsensePose:
                     wrist_3d_base = trans_camera_base(wrist_3d)
                 # print(wrist_3d_base)
                     rospy.set_param("wrist", [float(wrist_3d_base[0]), float(wrist_3d_base[1]), float(wrist_3d_base[2])])
-                    print(wrist_3d_base)
-                    text = '{:.2f}, {:.2f}, {:.2f}'.format(wrist_3d_base[0], wrist_3d_base[1], wrist_3d_base[2])
-                    cv2.putText(frame_markers, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+
+                    # print(self.hand_pose)
+                    # print(wrist_3d_base)
+                    # text = '{:.2f}, {:.2f}, {:.2f}'.format(wrist_3d_base[0], wrist_3d_base[1], wrist_3d_base[2])
+                    # cv2.putText(frame_markers, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
             current_time = (cv2.getTickCount() - current_time) / cv2.getTickFrequency()
             if mean_time == 0:

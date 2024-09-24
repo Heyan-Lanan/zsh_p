@@ -1,4 +1,5 @@
 import pyrealsense2 as rs
+from cv2.gapi import kernel
 from cvzone.HandTrackingModule import HandDetector
 import cv2
 import numpy as np
@@ -162,6 +163,30 @@ class RealsensePose:
                     id = boxes.cls[index]
                     xyxy_ = boxes.xyxy[index]
                     xyxy = [int(item) for item in xyxy_]
+                    # print(xyxy)
+                    # print(color_image.shape)
+                    img_cut = color_image[xyxy[1]-5:xyxy[3]+5, xyxy[0]-5:xyxy[2]+5]
+                    # cv2.imshow('img_cut', img_cut)
+
+                    gray = cv2.cvtColor(img_cut, cv2.COLOR_BGR2GRAY)
+                    blurred = cv2.GaussianBlur(gray, (9, 9), 2)
+
+                    # 检测圆
+                    circles = cv2.HoughCircles(blurred, cv2.HOUGH_GRADIENT, dp=20.0, minDist=40, param1=50, param2=30,
+                                               minRadius=10, maxRadius=50)
+
+                    # 绘制圆
+                    if circles is not None:
+                        circles = np.uint16(np.around(circles))
+                        for i in circles[0, :]:
+                            center = (i[0], i[1])
+                            radius = i[2]
+                            # 绘制圆心
+                            cv2.circle(img_cut, center, 3, (0, 255, 0), -1)
+                            # 绘制圆的边界
+                            cv2.circle(img_cut, center, radius, (0, 255, 0), 2)
+                    # cv2.imshow("img_cut", img_cut)
+
                     center_x = int((xyxy[0] + xyxy[2]) / 2)
                     center_y = int((xyxy[1] + xyxy[3]) / 2)
                     chess_3d = vertices[w2 * int(center_y) + int(center_x)]
@@ -170,7 +195,7 @@ class RealsensePose:
                         chess_param = [float(chess_3d_base[0]), float(chess_3d_base[1]), float(chess_3d_base[2])]
                         rospy.set_param("chess_" + str(int(id.cpu().numpy())), chess_param)
                         text = '{:.3f}, {:.3f}, {:.3f}'.format(chess_param[0], chess_param[1], chess_param[2])
-                        cv2.putText(img_2, text, (center_x, center_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                        cv2.putText(frame_markers, text, (center_x, center_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
                         if np.sqrt(np.sum((chess_3d - finger_12_3d) ** 2)) > 0.05:
                             chess_available.append(int(id.cpu().numpy()))
